@@ -147,6 +147,3 @@ The tokenizer-reimplementation bonus is not claimed: the project uses the public
 - Python `argparse` documentation: https://docs.python.org/3/library/argparse.html
 - The project subject PDF supplied in this repository.
 
-AI was used to analyze the subject, scaffold the implementation, and prepare validation
-tests and documentation. The generated code was reviewed and adjusted to keep the
-schema enforcement explicit and testable.
