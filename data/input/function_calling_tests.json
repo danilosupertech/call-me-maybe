@@ -1,0 +1,35 @@
+[
+  {
+    "prompt": "What is the sum of 2 and 3?"
+  },
+  {
+    "prompt": "What is the sum of 265 and 345?"
+  },
+  {
+    "prompt": "Greet shrek"
+  },
+  {
+    "prompt": "Greet john"
+  },
+  {
+    "prompt": "Reverse the string 'hello'"
+  },
+  {
+    "prompt": "Please add -12.5 and 7.25"
+  },
+  {
+    "prompt": "Add 1000000 and 2500000"
+  },
+  {
+    "prompt": "Generate a greeting message for Ada"
+  },
+  {
+    "prompt": "Reverse the string 'hello world!'"
+  },
+  {
+    "prompt": "Can you greet Maria?"
+  },
+  {
+    "prompt": "Return the reversed text `abc123`"
+  }
+]
