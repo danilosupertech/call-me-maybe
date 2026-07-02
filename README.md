@@ -329,14 +329,5 @@ The tokenizer-reimplementation bonus is not claimed: the project uses the public
 
 ### How AI was used
 
-GitHub Copilot (Claude Sonnet model via VS Code) assisted during development:
-
-- **Debugging** (`src/decoder.py`, `src/llm_client.py`): identifying the root cause of
-  incorrect function selection for regex substitution prompts.
-- **Scorer fallback** (`src/llm_client.py`): implementing `_best_prefix_candidate` for
-  cases where constrained decoding does not reach an exact token match.
-- **Test additions** (`tests/test_decoder.py`): generating test cases for input error
-  handling and nested schema edge cases.
-
 All AI-generated content was reviewed, understood, and validated by the project author.
 
