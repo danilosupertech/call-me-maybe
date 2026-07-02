@@ -1,40 +1,32 @@
-UV := $(if $(wildcard .venv/Scripts/uv.exe),.venv/Scripts/uv.exe,uv)
+SHELL := /bin/bash
 
-.PHONY: install run run-verbose demo-flow demo-flow-fast debug clean lint lint-strict test doctor
+UV := $(shell if [ -x "$(HOME)/.local/bin/uv" ]; then echo "$(HOME)/.local/bin/uv"; else echo uv; fi)
+
+.PHONY: install run debug clean lint lint-strict test grade
 
 install:
-	python -m ensurepip --upgrade
-	python -m pip install uv
 	$(UV) sync
 
 run:
-	$(UV) run python -u -m src --verbose
-
-run-verbose:
-	$(UV) run python -u -m src --verbose
-
-demo-flow:
-	python scripts/demo_execution_flow.py --delay 2
-
-demo-flow-fast:
-	python scripts/demo_execution_flow.py --delay 0 --all
+	$(UV) run python -m src
 
 debug:
 	$(UV) run python -m pdb -m src
 
 clean:
-	python -c "import pathlib, shutil; [shutil.rmtree(p, ignore_errors=True) for p in pathlib.Path('.').rglob('__pycache__')]; [shutil.rmtree(p, ignore_errors=True) for p in [pathlib.Path('.mypy_cache'), pathlib.Path('.pytest_cache')]]"
+	find . -type d -name "__pycache__" -exec rm -rf {} +
+	rm -rf .mypy_cache .pytest_cache .ruff_cache
 
 lint:
 	$(UV) run flake8 .
-	$(UV) run mypy . --warn-return-any --warn-unused-ignores --ignore-missing-imports --disallow-untyped-defs --check-untyped-defs
+	$(UV) run mypy . --exclude '^llm_sdk/' --warn-return-any --warn-unused-ignores --ignore-missing-imports --disallow-untyped-defs --check-untyped-defs
 
 lint-strict:
 	$(UV) run flake8 .
-	$(UV) run mypy . --strict
+	$(UV) run mypy . --exclude '^llm_sdk/' --strict
 
 test:
 	$(UV) run pytest
 
-doctor:
-	$(UV) run python scripts/check_environment.py
+grade:
+	cd moulinette && $(UV) run python -m moulinette grade_student_answers ../data/output/function_calling_results.json

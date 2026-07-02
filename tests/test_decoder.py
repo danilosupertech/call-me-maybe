@@ -1,15 +1,8 @@
 """Tests for constrained function decoding."""
 
 import json
-import sys
-
-from pathlib import Path
-
 import pytest
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-
+from pathlib import Path
 from src.decoder import ConstrainedFunctionDecoder
 from src.errors import UserFacingError
 from src.io_utils import read_function_definitions, read_prompt_cases
@@ -18,13 +11,13 @@ from src.llm_client import TextScorer
 
 class FakeScorer(TextScorer):
     """Test scorer that mimics constrained LLM selection."""
-
     preferred_name: str = ""
 
     def choose_constrained(
         self,
         prompt: str,
         candidates: list[str],
+        hint: str = "",
     ) -> str:
         """Select a candidate by function name for deterministic tests."""
         for candidate in candidates:
@@ -172,6 +165,46 @@ def test_missing_input_file_is_user_facing(tmp_path: Path) -> None:
     """Missing input files should not leak tracebacks."""
     with pytest.raises(UserFacingError):
         read_prompt_cases(tmp_path / "missing.json")
+
+
+def test_replace_prompt_prioritizes_regex_function(tmp_path: Path) -> None:
+    """Replacement prompts should prioritize regex substitution function."""
+    definitions_path = tmp_path / "functions.json"
+    definitions_path.write_text(
+        json.dumps(
+            [
+                {
+                    "name": "fn_get_square_root",
+                    "description": "Calculate the square root of a number.",
+                    "parameters": {"a": {"type": "number"}},
+                    "returns": {"type": "number"},
+                },
+                {
+                    "name": "fn_substitute_string_with_regex",
+                    "description": "Replace all regex matches in a string.",
+                    "parameters": {
+                        "source_string": {"type": "string"},
+                        "regex": {"type": "string"},
+                        "replacement": {"type": "string"},
+                    },
+                    "returns": {"type": "string"},
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    decoder = ConstrainedFunctionDecoder(
+        functions=read_function_definitions(definitions_path),
+        scorer=FakeScorer(preferred_name="fn_substitute_string_with_regex"),
+    )
+
+    result = decoder.decode(
+        "Replace all numbers in \"Hello 34 I'm 233 years old\" with NUMBERS"
+    )
+
+    assert result.name == "fn_substitute_string_with_regex"
+    assert result.parameters["regex"] == r"\d+"
+    assert result.parameters["replacement"] == "NUMBERS"
 
 
 def test_invalid_input_json_is_user_facing(tmp_path: Path) -> None:

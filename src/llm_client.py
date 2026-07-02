@@ -1,5 +1,6 @@
 """LLM adapter and constrained token selection."""
 
+import json
 from typing import Any
 
 import numpy as np
@@ -18,6 +19,7 @@ class TextScorer(BaseModel):
         self,
         prompt: str,
         candidates: list[str],
+        hint: str = "",
     ) -> str:
         """Choose one candidate from an already constrained set."""
         if not candidates:
@@ -52,6 +54,7 @@ class SmallLLMScorer(TextScorer):
         self,
         prompt: str,
         candidates: list[str],
+        hint: str = "",
     ) -> str:
         """Generate one valid candidate with token-level constraints.
 
@@ -70,7 +73,10 @@ class SmallLLMScorer(TextScorer):
         if not valid_tokenized:
             return candidates[0] if candidates else ""
 
-        context = self._token_ids(_context_for_prompt(prompt))
+        names = [_extract_function_name(c) for c in candidates]
+        context = self._token_ids(
+            _context_for_prompt(prompt, [n for n in names if n is not None], hint)
+        )
         generated: list[int] = []
         max_steps = max(len(tokens) for tokens in valid_tokenized.values())
 
@@ -88,7 +94,7 @@ class SmallLLMScorer(TextScorer):
         exact_match = _candidate_for_tokens(valid_tokenized, generated)
         if exact_match is not None:
             return exact_match
-        return candidates[0]
+        return _best_prefix_candidate(valid_tokenized, generated, candidates)
 
     def _token_ids(self, text: str) -> list[int]:
         """Encode text and normalize SDK return types to a flat list."""
@@ -104,13 +110,33 @@ class SmallLLMScorer(TextScorer):
         return _to_float_list(self._model.get_logits_from_input_ids(token_ids))
 
 
-def _context_for_prompt(prompt: str) -> str:
+def _context_for_prompt(
+    prompt: str,
+    candidate_names: list[str] | None = None,
+    hint: str = "",
+) -> str:
     """Build the natural-language context for constrained generation."""
-    return (
-        "Select the correct function call for this prompt.\n"
-        f"Prompt: {prompt}\n"
-        "JSON:"
-    )
+    parts = [
+        "You are selecting one JSON function call candidate.",
+        "Use the user prompt as context and continue only with candidate JSON tokens.",
+    ]
+    if candidate_names:
+        unique_names = list(dict.fromkeys(candidate_names))
+        parts.append(f"Available functions: {', '.join(unique_names)}")
+    if hint:
+        parts.append(f"Function descriptions: {hint}")
+    parts.append(f"User prompt: {prompt}")
+    return "\n".join(parts) + "\n"
+
+
+def _extract_function_name(candidate_json: str) -> str | None:
+    """Extract the function name from a serialized JSON candidate."""
+    try:
+        data = json.loads(candidate_json)
+        name = data.get("name")
+        return str(name) if name is not None else None
+    except (ValueError, KeyError, TypeError):
+        return None
 
 
 def _candidate_for_tokens(
@@ -147,6 +173,40 @@ def _best_allowed_token(logits: list[float], allowed: set[int]) -> int:
         if token_id < masked_logits.size:
             masked_logits[token_id] = logits_array[token_id]
     return int(np.argmax(masked_logits))
+
+
+def _best_prefix_candidate(
+    candidates: dict[str, list[int]],
+    generated: list[int],
+    original_order: list[str],
+) -> str:
+    """Return candidate with longest matched prefix; break ties by order."""
+    if not candidates:
+        return original_order[0] if original_order else ""
+
+    ranked = sorted(
+        candidates.items(),
+        key=lambda item: (
+            _shared_prefix_length(item[1], generated),
+            -len(item[1]),
+        ),
+        reverse=True,
+    )
+    best_text = ranked[0][0]
+    # Keep deterministic behavior when scores tie.
+    for candidate in original_order:
+        if candidate == best_text:
+            return candidate
+    return best_text
+
+
+def _shared_prefix_length(a: list[int], b: list[int]) -> int:
+    """Return the number of shared leading tokens between two sequences."""
+    size = min(len(a), len(b))
+    for index in range(size):
+        if a[index] != b[index]:
+            return index
+    return size
 
 
 def _to_float_list(values: Any) -> list[float]:

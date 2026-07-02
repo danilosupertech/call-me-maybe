@@ -15,6 +15,27 @@ file remains parseable JSON with the expected keys.
 
 ## Instructions
 
+## Beginner Quick Start
+
+If you are starting now, use this exact sequence:
+
+```sh
+uv sync
+make run
+make grade
+```
+
+What each command does:
+
+- `uv sync`: installs project dependencies.
+- `make run`: reads prompts from `data/input` and writes results to `data/output/function_calling_results.json`.
+- `make grade`: checks your output against the public moulinette tests.
+
+If `make grade` shows `SCORE: 11/11`, your output is compliant with the public subject tests.
+
+For a full beginner-friendly walkthrough in Portuguese with visual diagrams,
+see [GUIA_PASSO_A_PASSO.md](GUIA_PASSO_A_PASSO.md).
+
 Install and run with `uv`:
 
 ```sh
@@ -65,14 +86,16 @@ path dependency together, which is required before `uv run python -m src` can lo
 ## Algorithm Explanation
 
 The decoder first loads `functions_definition.json` into Pydantic models. For each
-prompt, it creates one candidate call per available function. Candidate parameters are
-extracted according to the declared JSON types: numbers are read in text order, quoted
-strings are preferred for string parameters, booleans use common true/false words, and
-nested object or array schemas are filled recursively.
+prompt, it creates a bounded set of candidate calls for every available function. The
+search space is schema-aware: each parameter receives one deterministic baseline value
+and additional plausible alternatives from the prompt, such as quoted strings, named
+values, numbers, booleans, arrays, and nested object values.
 
 Each candidate is then coerced back through the expected schema. Missing or malformed
 values receive valid defaults, which guarantees that every candidate has exactly the
-required keys and valid parameter types.
+required keys and valid parameter types. The LLM therefore chooses a complete function
+call candidate, including both the function name and parameter values, rather than only
+choosing a function label.
 
 The application initializes `llm_sdk.Small_LLM_Model` through the public SDK wrapper.
 For each prompt, it serializes the schema-valid candidates to compact JSON, tokenizes
@@ -82,13 +105,167 @@ lead to a valid candidate. At every generation step, it calls
 valid JSON candidate, and appends the highest-logit allowed token. The mask is
 implemented with NumPy: invalid token logits are set to negative infinity and `argmax`
 selects the best remaining token. Generation stops only when the token sequence exactly
-matches one complete candidate. The final output is then serialized with Python's
+matches one complete candidate or no more constrained tokens are available. If the
+sequence ends without an exact match, the candidate with the longest shared token
+prefix is returned as the closest approximation. The final output is then serialized with Python's
 `json` module.
 
 This is constrained decoding: the model chooses the function call token by token, but
 invalid JSON, unknown function names, extra keys, missing parameters, and wrong schema
 types are never reachable. If the SDK cannot be loaded, the program stops with a clear
 error.
+
+## End-to-End Visual Flow
+
+The diagram below shows the complete execution path from the command line to the final
+JSON file.
+
+```text
++---------------------------------------------------------------+
+| 1. User runs the project                                      |
+|                                                               |
+|    uv run python -m src                                       |
+|    make run                                                   |
++-------------------------------+-------------------------------+
+                                |
+                                v
++---------------------------------------------------------------+
+| 2. src/__main__.py starts the application                     |
+|                                                               |
+|    - imports the CLI entry point                              |
+|    - exits cleanly with a clear error message if needed        |
++-------------------------------+-------------------------------+
+                                |
+                                v
++---------------------------------------------------------------+
+| 3. src/cli.py reads command-line arguments                    |
+|                                                               |
+|    Default paths:                                             |
+|    - data/input/functions_definition.json                     |
+|    - data/input/function_calling_tests.json                   |
+|    - data/output/function_calling_results.json                |
++-------------------------------+-------------------------------+
+                                |
+                                v
++---------------------------------------------------------------+
+| 4. src/io_utils.py loads and validates JSON inputs            |
+|                                                               |
+|    functions_definition.json   -> FunctionDefinition models   |
+|    function_calling_tests.json -> PromptCase models           |
+|                                                               |
+|    Missing or malformed files are reported as user-facing      |
+|    errors instead of raw tracebacks.                           |
++-------------------------------+-------------------------------+
+                                |
+                                v
++---------------------------------------------------------------+
+| 5. src/llm_client.py loads the LLM through the public SDK     |
+|                                                               |
+|    Small_LLM_Model                                            |
+|    - encode(text)                                             |
+|    - get_logits_from_input_ids(token_ids)                     |
+|                                                               |
+|    No private SDK methods or attributes are used.              |
++-------------------------------+-------------------------------+
+                                |
+                                v
++---------------------------------------------------------------+
+| 6. src/decoder.py receives each prompt                        |
+|                                                               |
+|    For every available function, it asks src/extractor.py      |
+|    to build schema-shaped parameter candidates.                |
++-------------------------------+-------------------------------+
+                                |
+                                v
++---------------------------------------------------------------+
+| 7. src/extractor.py builds valid candidate parameters         |
+|                                                               |
+|    Prompt example:                                            |
+|    "Please add -12.5 and 7.25"                                |
+|                                                               |
+|    Candidate example:                                         |
+|    {"name":"fn_add_numbers","parameters":{"a":-12.5,"b":7.25}}|
+|                                                               |
+|    The candidate space is bounded, schema-aware, and ordered   |
+|    to avoid uncontrolled free-form generation.                 |
++-------------------------------+-------------------------------+
+                                |
+                                v
++---------------------------------------------------------------+
+| 8. Constrained token selection chooses one complete JSON call |
+|                                                               |
+|    At each step:                                              |
+|    - candidate JSON strings are tokenized                     |
+|    - only tokens that still match at least one valid candidate |
+|      remain allowed                                           |
+|    - invalid token logits are masked with negative infinity    |
+|    - the highest-logit allowed token is selected               |
+|                                                               |
+|    Result: the LLM chooses, but invalid JSON is unreachable.   |
++-------------------------------+-------------------------------+
+                                |
+                                v
++---------------------------------------------------------------+
+| 9. Pydantic models and schema coercion protect the output     |
+|                                                               |
+|    Final object shape:                                        |
+|    {                                                          |
+|      "prompt": "...",                                        |
+|      "name": "fn_...",                                       |
+|      "parameters": { ... }                                   |
+|    }                                                          |
+|                                                               |
+|    Unknown functions, extra keys, missing arguments, and wrong |
+|    schema types are prevented before writing the file.         |
++-------------------------------+-------------------------------+
+                                |
+                                v
++---------------------------------------------------------------+
+| 10. src/io_utils.py writes the final JSON output              |
+|                                                               |
+|     data/output/function_calling_results.json                 |
+|                                                               |
+|     The output directory is generated at runtime and should    |
+|     not be committed to the repository.                        |
++---------------------------------------------------------------+
+```
+
+A short version of the flow is:
+
+```text
+Command
+  -> CLI
+  -> JSON input validation
+  -> SDK-backed LLM scorer
+  -> schema-aware candidate generation
+  -> constrained token selection
+  -> Pydantic-validated function call
+  -> final JSON output
+```
+
+Concrete example:
+
+```text
+Input prompt:
+  Please add -12.5 and 7.25
+
+Available function:
+  fn_add_numbers(a: number, b: number)
+
+Generated schema-valid candidate:
+  {"name":"fn_add_numbers","parameters":{"a":-12.5,"b":7.25}}
+
+Final output item:
+  {
+    "prompt": "Please add -12.5 and 7.25",
+    "name": "fn_add_numbers",
+    "parameters": {
+      "a": -12.5,
+      "b": 7.25
+    }
+  }
+```
+
 
 ## Design Decisions
 
@@ -114,11 +291,11 @@ the root project.
 
 ## Testing Strategy
 
-The test suite checks numeric extraction, string extraction, function selection, and JSON
-schema compliance at the decoder level. It also covers nested object arguments, arrays,
-booleans, missing input files, and malformed JSON. Additional manual checks should
-include empty prompt arrays, ambiguous prompts, larger function catalogs, and unusual
-special characters.
+The test suite checks numeric extraction, string extraction, constrained function-call
+selection, output cleanup, and JSON schema compliance at the decoder level. It also
+covers nested object arguments, arrays, booleans, missing input files, and malformed
+JSON. Additional manual checks should include empty prompt arrays, ambiguous prompts,
+larger function catalogs, and unusual special characters.
 
 Run tests with:
 
@@ -126,14 +303,17 @@ Run tests with:
 uv run pytest
 ```
 
-## Bonus Features
+## Additional Robustness Features
+
+These features support the mandatory part and improve reliability, but this submission
+does not claim the bonus part.
 
 - Multiple model names can be passed with `--model`; the value is forwarded to
   `llm_sdk.Small_LLM_Model` when the SDK is available.
-- `--verbose` / `make run` visualizes the decoding process by printing every prompt,
-  candidate function, extracted parameters, selected marker, and selected call.
-- Nested object, array, boolean, integer, number, and string parameters are supported
-  by the schema coercion layer.
+- `--verbose` helps inspect the decoding process by printing each prompt, candidate
+  function, extracted parameters, and selected call.
+- Nested object, array, boolean, integer, number, and string parameters are handled by
+  the schema coercion layer.
 - The test suite includes unit tests for simple calls, trace output, nested arguments,
   and input error handling.
 
@@ -146,4 +326,17 @@ The tokenizer-reimplementation bonus is not claimed: the project uses the public
 - Python `json` module documentation: https://docs.python.org/3/library/json.html
 - Python `argparse` documentation: https://docs.python.org/3/library/argparse.html
 - The project subject PDF supplied in this repository.
+
+### How AI was used
+
+GitHub Copilot (Claude Sonnet model via VS Code) assisted during development:
+
+- **Debugging** (`src/decoder.py`, `src/llm_client.py`): identifying the root cause of
+  incorrect function selection for regex substitution prompts.
+- **Scorer fallback** (`src/llm_client.py`): implementing `_best_prefix_candidate` for
+  cases where constrained decoding does not reach an exact token match.
+- **Test additions** (`tests/test_decoder.py`): generating test cases for input error
+  handling and nested schema edge cases.
+
+All AI-generated content was reviewed, understood, and validated by the project author.
 

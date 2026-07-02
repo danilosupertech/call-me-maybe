@@ -1,34 +1,26 @@
 [project]
-name = "callmemaybe"
+name = "call-me-maybe"
 version = "0.1.0"
-description = "Schema-constrained function calling from natural language prompts."
-readme = "README.md"
-requires-python = ">=3.10"
+description = "Function calling project for 42 curriculum"
+requires-python = ">=3.10,<3.15"
 dependencies = [
     "llm-sdk",
-    "numpy>=1.26",
-    "pydantic>=2.7",
-]
-
-[project.optional-dependencies]
-dev = [
-    "flake8==7.1.2",
-    "mypy>=1.10",
-    "pytest>=8.0",
+    "numpy",
+    "pydantic",
 ]
 
 [dependency-groups]
 dev = [
-    "flake8==7.1.2",
-    "mypy>=1.10",
-    "pytest>=8.0",
+    "flake8",
+    "mypy",
+    "pytest",
 ]
 
 [tool.uv.sources]
 llm-sdk = { path = "llm_sdk" }
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.12"
 warn_return_any = true
 warn_unused_ignores = true
 ignore_missing_imports = true
@@ -38,6 +30,18 @@ exclude = [
     "llm_sdk/",
 ]
 
+[[tool.mypy.overrides]]
+module = [
+    "llm_sdk",
+    "llm_sdk.*",
+]
+ignore_errors = true
+follow_imports = "skip"
+
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["."]
+pythonpath = [
+    ".",
+]
+testpaths = [
+    "tests",
+]

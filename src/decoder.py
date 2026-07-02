@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
-from .extractor import extract_arguments
+from .extractor import extract_argument_candidates
 from .llm_client import TextScorer
 from .models import FunctionCallResult, FunctionDefinition, TypeSpec
 
@@ -16,7 +16,6 @@ class Candidate(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     result: FunctionCallResult
-    score: float
     json_text: str
 
 
@@ -50,36 +49,52 @@ class ConstrainedFunctionDecoder(BaseModel):
 
     def decode_with_trace(self, prompt: str) -> DecodeTrace:
         """Return the selected call and all constrained candidates."""
-        candidates = [
-            self._candidate_for(prompt, function)
-            for function in self.functions
-        ]
+        candidates: list[Candidate] = []
+        for function in self.functions:
+            candidates.extend(self._candidates_for(prompt, function))
         chosen_text = self.scorer.choose_constrained(
             prompt,
             [candidate.json_text for candidate in candidates],
+            hint="; ".join(
+                f"{f.name}: {f.description}" for f in self.functions
+            ),
         )
         best = _candidate_by_text(candidates, chosen_text)
+
+        # Keep verbose output simple: one representative candidate per function.
         trace_candidates = [
             TraceCandidate(
                 name=candidate.result.name,
                 parameters=candidate.result.parameters,
                 score=1.0 if candidate.json_text == best.json_text else 0.0,
             )
-            for candidate in _selected_first(candidates, best)
+            for candidate in _one_candidate_per_function(candidates, best)
         ]
+
         return DecodeTrace(
             prompt=prompt,
             candidates=trace_candidates,
             selected=best.result,
         )
 
-    def _candidate_for(
+    def _candidates_for(
         self,
         prompt: str,
         function: FunctionDefinition,
+    ) -> list[Candidate]:
+        """Build schema-valid candidates for one function definition."""
+        return [
+            self._candidate_from_params(prompt, function, raw_params)
+            for raw_params in extract_argument_candidates(prompt, function)
+        ]
+
+    def _candidate_from_params(
+        self,
+        prompt: str,
+        function: FunctionDefinition,
+        raw_params: dict[str, Any],
     ) -> Candidate:
-        """Build and score one function call candidate."""
-        raw_params = extract_arguments(prompt, function)
+        """Build one schema-compliant JSON candidate."""
         params = {
             name: _coerce_value(raw_params.get(name), spec)
             for name, spec in function.parameters.items()
@@ -94,7 +109,29 @@ class ConstrainedFunctionDecoder(BaseModel):
             sort_keys=True,
             separators=(",", ":"),
         )
-        return Candidate(result=result, score=0.0, json_text=json_text)
+        return Candidate(result=result, json_text=json_text)
+
+
+def _one_candidate_per_function(
+    candidates: list[Candidate],
+    selected: Candidate,
+) -> list[Candidate]:
+    """Return one representative trace candidate per function name."""
+    ordered_candidates = [selected] + [
+        candidate
+        for candidate in candidates
+        if candidate.json_text != selected.json_text
+    ]
+
+    representatives: list[Candidate] = []
+    seen_names: set[str] = set()
+    for candidate in ordered_candidates:
+        name = candidate.result.name
+        if name in seen_names:
+            continue
+        seen_names.add(name)
+        representatives.append(candidate)
+    return representatives
 
 
 def _candidate_by_text(
@@ -106,18 +143,6 @@ def _candidate_by_text(
         if candidate.json_text == json_text:
             return candidate
     return candidates[0]
-
-
-def _selected_first(
-    candidates: list[Candidate],
-    selected: Candidate,
-) -> list[Candidate]:
-    """Return candidates with the selected one first."""
-    return [selected] + [
-        candidate
-        for candidate in candidates
-        if candidate.json_text != selected.json_text
-    ]
 
 
 def _coerce_value(value: Any, spec: TypeSpec) -> Any:
